@@ -25,11 +25,12 @@ def get_chunks(file_path, chunk_size=3000, overlap=500):
 from llama_cpp import Llama
 import json
 
-# Initialize model (Ensure you have the .gguf file downloaded)
+
+
+# change model here and also otehr settigns
 llm = Llama(model_path="Phi-3.5-mini-instruct-Q4_K_M.gguf", n_ctx=2048, n_threads=6)
 
 def extract_data(chunk):
-    # Explicitly define keys to match your Wide SQLite schema
     prompt = f"""### System: Extract shipping rates from the text. 
 Return a JSON LIST of objects with these keys: 
 "origin", "destination", "rate_20", "rate_40", "rate_40hc", "rate_45".
@@ -43,8 +44,6 @@ If a rate is for D2, put it in rate_20. If D4, rate_40. If D5, rate_40hc. If D7,
 
 def upsert_rate(conn, data):
     cursor = conn.cursor()
-    # Since we moved to a Wide format, we dynamically pick the column
-    # data example: {'origin': 'CHICAGO', 'destination': 'DALIAN', 'rate_20': 1050}
     
     query = f'''INSERT INTO rates (contract_no, origin, destination, rate_20, rate_40, rate_40hc, rate_45, is_complete)
                VALUES (:contract_no, :origin, :destination, :rate_20, :rate_40, :rate_40hc, :rate_45, :is_complete)
@@ -64,13 +63,11 @@ def export_to_excel(db_conn, template_path):
     query = "SELECT origin, destination, rate_20, rate_40, rate_40hc, rate_45 FROM rates"
     df_data = pd.read_sql_query(query, db_conn)
     
-    # We use openpyxl to write to specific columns to keep the template's 
-    # contract ID and dates in columns A-D intact.
     from openpyxl import load_workbook
     book = load_workbook(template_path, keep_vba=True)
-    sheet = book['Sheet1'] # Or whatever your sheet name is
+    sheet = book['Sheet1'] 
     
-    start_row = 2 # Assuming row 1 is headers
+    start_row = 2 
     for i, row in df_data.iterrows():
         sheet.cell(row=start_row + i, column=5).value = row['origin']
         sheet.cell(row=start_row + i, column=7).value = row['destination']
@@ -83,7 +80,6 @@ def export_to_excel(db_conn, template_path):
 
 def run_pipeline(file_path):
     conn = init_db()
-    # Global state to pass context between chunks
     current_context = {
         "contract_no": "ATL0347N25",
         "last_origin": None,
@@ -91,10 +87,8 @@ def run_pipeline(file_path):
     }
 
     for chunk in get_chunks(file_path):
-        # 1. Add context to the prompt so the model knows the current Origin
         enriched_prompt = f"Current Origin: {current_context['last_origin']}\nChunk: {chunk}"
         
-        # 2. Extract and Parse
         raw_json = extract_data(enriched_prompt)
         try:
             data_list = json.loads(raw_json)
@@ -104,14 +98,11 @@ def run_pipeline(file_path):
                     data_list = [data_list]
                 else:
                     continue # Skip if it's just a random string
-            # Inside run_pipeline, before calling upsert_rate:
             for record in data_list:
-                # Ensure all expected keys exist to avoid KeyError in SQL execution
                 for key in ['origin', 'destination', 'rate_20', 'rate_40', 'rate_40hc', 'rate_45']:
                     if key not in record:
                         record[key] = None
                 
-                # Check if we have at least an origin and destination before inserting
                 if not record.get('origin'):
                     record['origin'] = current_context['last_origin']
                 
@@ -121,22 +112,20 @@ def run_pipeline(file_path):
                     record['is_complete'] = 1 if all([record['rate_20'], record['rate_40']]) else 0
                     upsert_rate(conn, record)
         except json.JSONDecodeError:
-            continue # Skip malformed chunks
+            continue 
 
     export_to_excel(conn, 'ATL0347N25 Template.xlsm')
 import re
 
 def clean_json_output(raw_output):
-    # Find the first '[' or '{' and the last ']' or '}'
     match = re.search(r'([\[\{].*[\]\}])', raw_output, re.DOTALL)
     if match:
         return match.group(1)
-    return "[]" # Return empty list if no JSON found
+    return "[]"
 
 
 
 if __name__ == "__main__":
-    # Ensure the template exists in the directory before running
     input_file = "output.txt"
     template_file = "ATL0347N25 Template.xlsm"
     
